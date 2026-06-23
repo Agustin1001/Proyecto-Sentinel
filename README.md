@@ -18,7 +18,7 @@ El sistema puede dispararse automáticamente por schedule, manualmente desde n8n
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Ubuntu Server 24.04                   │
+│                     Ubuntu Server 24.04                      │
 │                                                             │
 │  ┌──────────┐    ┌──────────┐    ┌──────────────────────┐  │
 │  │ Dashboard│    │   n8n    │    │  Greenbone / OpenVAS │  │
@@ -58,6 +58,7 @@ El sistema puede dispararse automáticamente por schedule, manualmente desde n8n
 - Docker Compose v2+
 - 8 GB RAM mínimo (16 GB recomendado para OpenVAS)
 - 50 GB de disco libre
+- La VM debe tener una interfaz de red en la red `192.168.100.0/24`
 
 ---
 
@@ -67,7 +68,7 @@ El sistema puede dispararse automáticamente por schedule, manualmente desde n8n
 
 ```bash
 git clone https://github.com/Carlosfmr95/Bits-Bytes_Sentinel
-cd sentinel
+cd Bits-Bytes_Sentinel
 ```
 
 ### 2 — Ejecutar el script de configuración
@@ -77,9 +78,19 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-El script detecta automáticamente la IP de la VM, genera la clave de encriptación de n8n y solicita las credenciales necesarias. Al finalizar crea el archivo `.env` listo para usar.
+El script realiza automáticamente lo siguiente:
+- Detecta la IP de la VM en la red `192.168.100.0/24`
+- Genera una clave de encriptación aleatoria para n8n
+- Solicita las credenciales (PostgreSQL, GVM/OpenVAS, n8n)
+- Escribe el archivo `.env` completo y listo para usar
 
-> **Nota:** si necesitás ajustar algún valor después (red de laboratorio, zona horaria, etc.) podés editar `.env` directamente. Los campos disponibles están documentados en `.env.example`.
+Credenciales que el script va a pedir:
+
+| Credencial | Descripción |
+|---|---|
+| Usuario/Contraseña PostgreSQL | Acceso a la base de datos de resultados |
+| Usuario/Contraseña GVM | Acceso a OpenVAS (usuario `admin` recomendado) |
+| Usuario/Contraseña n8n | Acceso al panel de automatización |
 
 ### 3 — Levantar el stack
 
@@ -87,7 +98,13 @@ El script detecta automáticamente la IP de la VM, genera la clave de encriptaci
 docker compose up -d
 ```
 
-La primera vez tarda entre 10 y 30 minutos porque OpenVAS descarga las bases de datos de vulnerabilidades. Las tablas de la base de datos se crean automáticamente al iniciar el contenedor de PostgreSQL.
+> **Primera vez:** tarda entre 10 y 30 minutos porque OpenVAS descarga sus bases de datos de vulnerabilidades. Las tablas de PostgreSQL se crean automáticamente — no hace falta ejecutar ningún SQL manualmente.
+
+Para ver el progreso en tiempo real:
+
+```bash
+docker compose logs -f
+```
 
 ### 4 — Verificar que todos los servicios están corriendo
 
@@ -95,15 +112,73 @@ La primera vez tarda entre 10 y 30 minutos porque OpenVAS descarga las bases de 
 docker compose ps
 ```
 
-Todos los servicios deben mostrar `running` o `healthy`. Los servicios propios (dashboard, nmap-api, gvm-api) exponen un endpoint `/health` que Docker monitorea automáticamente.
+Los servicios deben mostrar `running` o `healthy`. Los contenedores de datos de OpenVAS (`scap-data`, `vulnerability-tests`, etc.) pueden tardar varios minutos en pasar a `healthy` la primera vez.
 
-### 5 — Importar el workflow en n8n
+Si `scap-data` muestra error, reiniciarlo una vez que los otros feeds estén listos:
 
-1. Abrir `http://<IP_VM>:5678` e iniciar sesión con las credenciales de n8n ingresadas en el setup
-2. Ir a **Workflows → Import from file**
+```bash
+docker compose restart scap-data
+```
+
+### 5 — Configurar n8n
+
+#### 5.1 — Crear cuenta de administrador
+
+Abrir en el browser:
+
+```
+http://192.168.100.5:5678
+```
+
+> Reemplazar `192.168.100.5` con la IP real de la VM que mostró el `setup.sh`.
+
+La primera vez n8n muestra un formulario para crear la cuenta de administrador. Completarlo con los datos que se deseen (no necesitan coincidir con los del `.env`).
+
+#### 5.2 — Importar el workflow
+
+1. En el panel izquierdo → **Workflows**
+2. Botón **Add workflow** → **Import from file**
 3. Seleccionar el archivo `n8n/Workflow TIF -Bits&Bytes.json`
-4. Configurar las credenciales de PostgreSQL en los nodos correspondientes
-5. Hacer click en **Publish** para activar el webhook
+
+#### 5.3 — Crear la credencial de PostgreSQL
+
+Los nodos que escriben en la base de datos necesitan una credencial configurada. Hacerlo una sola vez:
+
+1. Menú superior derecho (ícono de usuario) → **Settings** → **Credentials**
+2. Botón **Add credential** → buscar y seleccionar **PostgreSQL**
+3. Completar con los siguientes valores:
+
+| Campo | Valor |
+|---|---|
+| **Name** | `PostgresSQL Scans` (exactamente así) |
+| **Host** | `postgres-scans` |
+| **Database** | `security_scans` |
+| **User** | valor de `POSTGRES_USER` en el `.env` |
+| **Password** | valor de `POSTGRES_PASSWORD` en el `.env` |
+| **Port** | `5432` |
+| **SSL** | desactivado |
+
+4. Hacer click en **Save**
+
+#### 5.4 — Asignar la credencial a los nodos PostgreSQL
+
+En el editor del workflow, dos nodos necesitan la credencial:
+
+**Nodo "Guardar en PostgreSQL":**
+- Hacer click sobre el nodo
+- En el panel derecho → *Credential to connect with* → seleccionar `PostgresSQL Scans`
+
+**Nodo "Guardar Historial":**
+- Hacer click sobre el nodo
+- En el panel derecho → *Credential to connect with* → seleccionar `PostgresSQL Scans`
+
+#### 5.5 — Activar el workflow
+
+En la esquina superior derecha del editor del workflow:
+1. Hacer click en **Save**
+2. Activar el toggle **Inactive → Active** (o botón **Publish**)
+
+El webhook `/webhook/start-scan` queda activo y el dashboard puede disparar escaneos.
 
 ---
 
@@ -111,22 +186,57 @@ Todos los servicios deben mostrar `running` o `healthy`. Los servicios propios (
 
 ### Dashboard
 
-Acceder a `http://<IP_VM>:5002`
+Acceder a `http://192.168.100.5:5002`
 
-Desde el dashboard podés:
+Desde el dashboard se puede:
 - Ver todos los resultados de escaneos con filtros por host, severidad, herramienta y fecha
 - Buscar vulnerabilidades por nombre o CVE
 - Exportar resultados a CSV
 - Ver el historial de escaneos
-- Lanzar nuevos escaneos con seguimiento en tiempo real
+- Lanzar nuevos escaneos con seguimiento de progreso en tiempo real
 
 ### Lanzar un escaneo manualmente
 
-Hacer click en **▶ NUEVO ESCANEO** en el header del dashboard, ingresar la IP objetivo y seleccionar el tipo de escaneo.
+Hacer click en **▶ NUEVO ESCANEO** en el header del dashboard, ingresar la IP objetivo (`192.168.100.x`) y seleccionar el tipo de escaneo (`quick` o `full`).
 
 ### Escaneo automático
 
-El workflow está configurado para ejecutarse automáticamente a las 2:00 AM. Puede modificarse en n8n → Schedule Trigger.
+El workflow está configurado para ejecutarse automáticamente todos los días a las **2:00 AM**. Se puede modificar en n8n → nodo **Schedule Trigger**.
+
+---
+
+## Reinstalar desde cero
+
+Para borrar todo y empezar de nuevo (contenedores, volúmenes y datos):
+
+```bash
+# Detener y eliminar contenedores + todos los volúmenes (incluye datos de OpenVAS y PostgreSQL)
+docker compose down -v
+
+# Eliminar las imágenes propias para forzar rebuild
+docker rmi sentinel-dashboard sentinel-nmap-api sentinel-gvm-api 2>/dev/null || true
+```
+
+Luego volver desde el paso 2 de la instalación:
+
+```bash
+./setup.sh
+docker compose up -d
+```
+
+> **Atención:** `docker compose down -v` borra todos los datos incluyendo las bases de vulnerabilidades de OpenVAS. La próxima vez que se levante el stack va a volver a descargarlas (10-30 minutos).
+
+### Reinstalar solo la aplicación (conservar feeds de OpenVAS)
+
+Si se quiere resetear solo la base de datos y n8n sin volver a descargar los feeds de OpenVAS:
+
+```bash
+docker compose down
+docker volume rm sentinel_n8n_data_vol sentinel_postgres_scans_data
+docker compose up -d
+```
+
+Después volver a ejecutar el **Paso 5** para reimportar el workflow y reconfigurar las credenciales en n8n.
 
 ---
 
@@ -163,13 +273,7 @@ sentinel/
 
 ## Red de laboratorio
 
-El sistema escanea únicamente la red configurada en `SCAN_NETWORK` (por defecto `192.168.100.0/24`). Para cambiarla, editar el `.env`:
-
-```env
-SCAN_NETWORK=10.0.0.0/24
-```
-
-Y actualizar también el nodo **Nmap - Descubrir hosts activos** en n8n → campo `target` con el mismo rango.
+El sistema escanea únicamente la red `192.168.100.0/24`. Cualquier IP fuera de ese rango es rechazada por los microservicios.
 
 ---
 
@@ -177,7 +281,7 @@ Y actualizar también el nodo **Nmap - Descubrir hosts activos** en n8n → camp
 
 - **Python 3.11** / Flask — backend de microservicios
 - **PostgreSQL 16** — almacenamiento de resultados
-- **n8n** — orquestación del workflow de escaneo
+- **n8n 1.88.0** — orquestación del workflow de escaneo
 - **Nmap** — descubrimiento de hosts y escaneo de puertos
 - **OpenVAS / Greenbone Community Edition** — análisis de vulnerabilidades
 - **Docker / Docker Compose** — contenedores y orquestación

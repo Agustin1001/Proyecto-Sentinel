@@ -79,9 +79,6 @@ while true; do
     printf "  ${RED}No puede estar vacía.${NC}\n"
 done
 
-read -r -p "  Red de laboratorio [192.168.100.0/24]: " SCAN_NET
-SCAN_NET=${SCAN_NET:-192.168.100.0/24}
-
 read -r -p "  Zona horaria [America/Argentina/Buenos_Aires]: " TZ_VAL
 TZ_VAL=${TZ_VAL:-America/Argentina/Buenos_Aires}
 
@@ -115,7 +112,7 @@ TZ_VAL=${TZ_VAL:-America/Argentina/Buenos_Aires}
     printf 'N8N_WEBHOOK_URL=http://n8n:5678/webhook/start-scan\n'
     printf '\n'
     printf '# ── Red de laboratorio ────────────────────────────────────────────────────────\n'
-    printf 'SCAN_NETWORK=%s\n' "$SCAN_NET"
+    printf 'SCAN_NETWORK=192.168.100.0/24\n'
     printf '\n'
     printf '# ── Zona horaria ──────────────────────────────────────────────────────────────\n'
     printf 'TZ=%s\n' "$TZ_VAL"
