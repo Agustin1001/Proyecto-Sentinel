@@ -191,7 +191,7 @@ def scan_discovery():
     Usado para mapear la red antes de escanear hosts específicos.
     """
     data = request.get_json()
-    target = data.get("target", "192.168.100.0/24").strip()
+    target = data.get("target", SCAN_NETWORK).strip()
 
     if not is_target_allowed(target):
         return jsonify({"error": f"Target '{target}' no está en la red de laboratorio permitida"}), 403

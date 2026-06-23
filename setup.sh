@@ -15,15 +15,32 @@ if [ -f .env ]; then
 fi
 
 # ── Detectar IP de la VM ──────────────────────────────────────────────────────
-VM_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+# Obtener todas las IPs (sin loopback ni IPv6)
+ALL_IPS=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '^127\.' || true)
+
+# Preferir IPs de redes privadas tipo 192.168.x.x (red de laboratorio)
+VM_IP=$(printf '%s\n' "$ALL_IPS" | grep '^192\.168\.' | head -1)
+
+# Fallback: primer IP disponible
 if [ -z "${VM_IP:-}" ]; then
-    VM_IP=$(ip -4 addr show scope global 2>/dev/null \
-        | awk '/inet /{print $2}' | cut -d/ -f1 | head -1 || true)
+    VM_IP=$(printf '%s\n' "$ALL_IPS" | head -1)
 fi
-if [ -z "${VM_IP:-}" ]; then
-    read -r -p "No se pudo detectar la IP. Ingresá la IP de esta VM: " VM_IP
+
+# Si hay más de una IP, mostrarlas y pedir confirmación
+IP_COUNT=$(printf '%s\n' "$ALL_IPS" | grep -c . || true)
+if [ "${IP_COUNT:-0}" -gt 1 ]; then
+    printf "  Se detectaron varias interfaces de red:\n"
+    printf '%s\n' "$ALL_IPS" | nl -w4 -s') '
+    printf "  IP seleccionada: ${GREEN}%s${NC}\n" "$VM_IP"
+    read -r -p "  ¿Usar esta IP? [S/n]: " CONFIRM
+    if [[ "${CONFIRM:-S}" =~ ^[Nn] ]]; then
+        read -r -p "  Ingresá la IP correcta: " VM_IP
+    fi
+elif [ -z "${VM_IP:-}" ]; then
+    read -r -p "  No se pudo detectar la IP. Ingresá la IP de esta VM: " VM_IP
 fi
-printf "  IP detectada: ${GREEN}%s${NC}\n\n" "$VM_IP"
+
+printf "  IP seleccionada: ${GREEN}%s${NC}\n\n" "$VM_IP"
 
 # ── Generar clave de encriptación para n8n ────────────────────────────────────
 if command -v openssl >/dev/null 2>&1; then
